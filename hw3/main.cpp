@@ -16,6 +16,12 @@
 #include "tensorflow/lite/schema/schema_generated.h"
 #include "tensorflow/lite/version.h"
 #include "uLCD_4DGL.h"
+#include "math.h"
+#include "stm32l475e_iot01_accelero.h"
+
+using namespace std::chrono;
+
+#define PI 3.14159265
 // Create an area of memory to use for input, output, and intermediate arrays.
 // The size of this will depend on the model you're using, and may need to be
 // determined by experimentation.
@@ -27,19 +33,40 @@ BufferedSerial pc(USBTX, USBRX);
 uLCD_4DGL uLCD(D1, D0, D2);
 void GestureUI(Arguments *in, Reply *out);
 RPCFunction rpcLED(&GestureUI, "GestureUI");
+void Tilt(Arguments *in, Reply *out);
+RPCFunction jud(&Tilt, "TILT");
 int Gestureselect();
-void flip();
+void Tiltjudge();
+void flip(Arguments *in, Reply *out);
+RPCFunction change(&flip, "FLIP");
 double x, y;
 constexpr int kTensorArenaSize = 60 * 1024;
 uint8_t tensor_arena[kTensorArenaSize];
+
 EventQueue queue(32 * EVENTS_EVENT_SIZE);
+EventQueue queue2(32 * EVENTS_EVENT_SIZE);
+EventQueue time_queue(32 * EVENTS_EVENT_SIZE);
 InterruptIn mypin(USER_BUTTON);
+Ticker flipper;
 Thread t;
+Thread t2;
+Thread t3(osPriorityLow);
 WiFiInterface *wifi;
 int angle = 30;
+double true_angle=0;
 int mode = 0;
 
-volatile int message_num = 0;
+MQTT::Client<MQTTNetwork, Countdown> *client2;
+int16_t value[3];
+
+char buf[256], outbuf[256];
+
+double thres, val;
+
+FILE *devin = fdopen(&pc, "r");
+FILE *devout = fdopen(&pc, "w");
+
+int message_num = 0;
 volatile int arrivedcount = 0;
 volatile bool closed = false;
 
@@ -48,10 +75,14 @@ const char* topic = "Mbed";
 Thread mqtt_thread(osPriorityHigh);
 EventQueue mqtt_queue(32 * EVENTS_EVENT_SIZE);
 
+void flip(Arguments *in, Reply *out) {
+  mode = !mode;
+  //printf("%d", mode);
+}
+
 void messageArrived(MQTT::MessageData& md) {
     MQTT::Message &message = md.message;
     char msg[300];
-    mode = 1;
     sprintf(msg, "Message arrived: QoS%d, retained %d, dup %d, packetID %d\r\n", message.qos, message.retained, message.dup, message.id);
     printf(msg);
     ThisThread::sleep_for(1000ms);
@@ -62,10 +93,16 @@ void messageArrived(MQTT::MessageData& md) {
 }
 
 void publish_message(MQTT::Client<MQTTNetwork, Countdown>* client) {
-    message_num++;
+    if (mode == 0 || message_num == 10) {
+      message_num = 0;
+    } else {
+      message_num++;
+    }
+    
     MQTT::Message message;
     char buff[100];
-    sprintf(buff, "QoS0 Angle: %d #%d", angle, message_num);
+    sprintf(buff, "%d %d %f", mode, message_num, true_angle);
+    
     message.qos = MQTT::QOS0;
     message.retained = false;
     message.dup = false;
@@ -73,8 +110,8 @@ void publish_message(MQTT::Client<MQTTNetwork, Countdown>* client) {
     message.payloadlen = strlen(buff) + 1;
     int rc = client->publish(topic, message);
 
-    printf("rc:  %d\r\n", rc);
-    printf("Puslish message: %s\r\n", buff);
+    /*printf("rc:  %d\r\n", rc);
+    printf("Puslish message: %s\r\n", buff);*/
 }
 
 void close_mqtt() {
@@ -86,10 +123,7 @@ int main() {
     //The mbed RPC classes are now wrapped to create an RPC enabled version - see RpcClasses.h so don't add to base class
 
     // receive commands, and send back the responses
-    char buf[256], outbuf[256];
-
-    FILE *devin = fdopen(&pc, "r");
-    FILE *devout = fdopen(&pc, "w");
+    BSP_ACCELERO_Init();
     wifi = WiFiInterface::get_default_instance();
     if (!wifi) {
             printf("ERROR: No WiFiInterface found.\r\n");
@@ -108,9 +142,9 @@ int main() {
     NetworkInterface* net = wifi;
     MQTTNetwork mqttNetwork(net);
     MQTT::Client<MQTTNetwork, Countdown>client(mqttNetwork);
-
+    client2 = &client;
     //TODO: revise host to your IP
-    const char* host = "192.168.137.107";
+    const char* host = "192.168.137.179";
     printf("Connecting to TCP network...\r\n");
 
     SocketAddress sockAddr;
@@ -140,12 +174,19 @@ int main() {
     mqtt_thread.start(callback(&mqtt_queue, &EventQueue::dispatch_forever));
     mypin.rise(mqtt_queue.event(&publish_message, &client));
     int num = 0;
-
+    /*while(1){
+      BSP_ACCELERO_AccGetXYZ(value);
+      printf("%d, %d, %d\n", value[0], value[1], value[2]);
+      printf("%d, %g\n", value[2],cos(PI/180*angle));
+      ThisThread::sleep_for(500ms);
+    }*/
+    
     while (num != 5) {
             client.yield(100);
             ++num;
     }
     
+    //printf("%d, %d, %d\n", pDataXYZ[0], pDataXYZ[1], pDataXYZ[2]);
 
     while(1) {
         
@@ -160,7 +201,7 @@ int main() {
         }
         //Call the static call method on the RPC class
         RPC::call(buf, outbuf);
-        printf("%s\r\n", outbuf);
+        //printf("testsuccess\r\n");
     }
 }
 
@@ -172,7 +213,6 @@ void GestureUI (Arguments *in, Reply *out)   {
     // In this scenario, when using RPC delimit the two arguments with a space.
     x = in->getArg<double>();
     y = in->getArg<double>();
-    uLCD.printf("ABCD");
     mode = 0;
     // Have code here to call another RPC function to wake up specific led or close it.
     char buffer[200], outbuf[256];
@@ -240,7 +280,6 @@ int PredictGesture(float* output) {
 }
 
 int Gestureselect() {
-  uLCD.printf("ggggg"); 
   // Whether we should clear the buffer next time we fetch data
   bool should_clear_buffer = false;
   bool got_data = false;
@@ -338,7 +377,7 @@ int Gestureselect() {
     should_clear_buffer = gesture_index < label_num;
 
     // Produce an output
-    if (gesture_index == 0 && mode == 0){
+    if (gesture_index == 0){
       angle += 5;
       uLCD.color(BLUE);  
       uLCD.background_color(WHITE);
@@ -350,10 +389,9 @@ int Gestureselect() {
       uLCD.color(GREEN);
       uLCD.printf("\n%d\n", angle);
     }
-
     if (mode == 1){
       
-      uLCD.printf("KKKK");
+      //uLCD.printf("KKKK");
       //break;
       return 0;
     }
@@ -361,7 +399,7 @@ int Gestureselect() {
       
       //client.yield(100);
     }*/
-    if (gesture_index == 2 && mode == 0){
+    if (gesture_index == 2){
       angle -= 5;
       uLCD.color(BLUE);  
       uLCD.background_color(WHITE);
@@ -374,4 +412,46 @@ int Gestureselect() {
       uLCD.printf("\n%d\n", angle);
     }
   }
+}
+
+
+void Tilt (Arguments *in, Reply *out)   {
+    bool success = true;
+
+    // In this scenario, when using RPC delimit the two arguments with a space.
+    x = in->getArg<double>();
+    y = in->getArg<double>();
+    mode = 1;
+    // Have code here to call another RPC function to wake up specific led or close it.
+    char buffer[200], outbuf[256];
+    char strings[20];
+    t2.start(callback(&queue2, &EventQueue::dispatch_forever));
+    queue2.call(Tiltjudge);
+    //uLCD.printf("AAA");
+    /*sprintf(strings, "/myled%d/write %d", led, on);
+    strcpy(buffer, strings);
+    RPC::call(buffer, outbuf);
+    if (success) {
+        out->putData(buffer);
+    } else {
+        out->putData("Failed to execute LED control.");
+    }*/
+}
+void Tiltjudge() {
+    t3.start(callback(&time_queue, &EventQueue::dispatch_forever));
+    
+
+    while (1){
+      
+      BSP_ACCELERO_AccGetXYZ(value);
+      if(value[2]<cos(PI/180*angle)*1000 && mode == 1){
+        true_angle=acos(value[2]/1000.0)*180/PI;
+        time_queue.call(&publish_message, client2);
+      }
+
+      if (mode == 0){
+        return;
+      }
+      ThisThread::sleep_for(500ms);
+    }
 }
