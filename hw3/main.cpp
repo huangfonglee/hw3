@@ -25,10 +25,9 @@ using namespace std::chrono;
 // Create an area of memory to use for input, output, and intermediate arrays.
 // The size of this will depend on the model you're using, and may need to be
 // determined by experimentation.
-
-RpcDigitalOut myled1(LED2,"myled1");
-RpcDigitalOut myled2(LED2,"myled2");
-RpcDigitalOut myled3(LED3,"myled3");
+DigitalOut myled1(LED1);
+DigitalOut myled2(LED2);
+DigitalOut myled3(LED3);
 BufferedSerial pc(USBTX, USBRX);
 uLCD_4DGL uLCD(D1, D0, D2);
 void GestureUI(Arguments *in, Reply *out);
@@ -349,7 +348,7 @@ int Gestureselect() {
   }
 
   error_reporter->Report("Set up successful...\n");
-
+  myled1 = 1;
   while (true) {
     
     // Attempt to read new data from the accelerometer
@@ -390,7 +389,7 @@ int Gestureselect() {
       uLCD.printf("\n%d\n", angle);
     }
     if (mode == 1){
-      
+      myled1 = 0;
       //uLCD.printf("KKKK");
       //break;
       return 0;
@@ -417,7 +416,7 @@ int Gestureselect() {
 
 void Tilt (Arguments *in, Reply *out)   {
     bool success = true;
-
+    myled2 = 1;
     // In this scenario, when using RPC delimit the two arguments with a space.
     x = in->getArg<double>();
     y = in->getArg<double>();
@@ -425,6 +424,13 @@ void Tilt (Arguments *in, Reply *out)   {
     // Have code here to call another RPC function to wake up specific led or close it.
     char buffer[200], outbuf[256];
     char strings[20];
+    while (1) {
+      BSP_ACCELERO_AccGetXYZ(value);
+      if (value[2] > 980){
+        myled2 = 0;
+        break;
+      }
+    }
     t2.start(callback(&queue2, &EventQueue::dispatch_forever));
     queue2.call(Tiltjudge);
     //uLCD.printf("AAA");
@@ -438,18 +444,33 @@ void Tilt (Arguments *in, Reply *out)   {
     }*/
 }
 void Tiltjudge() {
+    myled3 = 1;
     t3.start(callback(&time_queue, &EventQueue::dispatch_forever));
     
 
     while (1){
-      
       BSP_ACCELERO_AccGetXYZ(value);
+      true_angle=acos(value[2]/1000.0)*180/PI;
+      uLCD.cls();
+      uLCD.color(BLUE);  
+      uLCD.background_color(WHITE);
+      uLCD.textbackground_color(WHITE);
+      // basic printf demo = 16 by 18 characters on screen
+      uLCD.locate(1, 1);
+      uLCD.text_width(4); //4X size text
+      uLCD.text_height(4);
+      uLCD.color(GREEN);
+      uLCD.printf("\n%.2lf\n", true_angle);
+
+      
       if(value[2]<cos(PI/180*angle)*1000 && mode == 1){
-        true_angle=acos(value[2]/1000.0)*180/PI;
+        
+
         time_queue.call(&publish_message, client2);
       }
 
       if (mode == 0){
+        myled3 = 0;
         return;
       }
       ThisThread::sleep_for(500ms);
