@@ -49,7 +49,7 @@ InterruptIn mypin(USER_BUTTON);
 Ticker flipper;
 Thread t;
 Thread t2;
-Thread t3(osPriorityLow);
+Thread t3/*(osPriorityLow)*/;
 WiFiInterface *wifi;
 int angle = 30;
 double true_angle=0;
@@ -97,11 +97,17 @@ void publish_message(MQTT::Client<MQTTNetwork, Countdown>* client) {
     } else {
       message_num++;
     }
-    
-    MQTT::Message message;
+
     char buff[100];
-    sprintf(buff, "%d %d %f", mode, message_num, true_angle);
-    
+
+    if (message_num == 0){
+      sprintf(buff, "%d %d %d", mode, message_num, angle);
+    }
+    else{
+      sprintf(buff, "%d %d %f", mode, message_num, true_angle);
+    }
+
+    MQTT::Message message;
     message.qos = MQTT::QOS0;
     message.retained = false;
     message.dup = false;
@@ -143,7 +149,7 @@ int main() {
     MQTT::Client<MQTTNetwork, Countdown>client(mqttNetwork);
     client2 = &client;
     //TODO: revise host to your IP
-    const char* host = "192.168.137.179";
+    const char* host = "192.168.43.123";
     printf("Connecting to TCP network...\r\n");
 
     SocketAddress sockAddr;

@@ -2,11 +2,11 @@
     "config": {
     "wifi-ssid": {
             "help": "WiFi SSID",
-            "value": "\"LAPTOP-PNTN5GOQ 5612\""
+            "value": "\"huangfonglee\""
     },
     "wifi-password": {
             "help": "WiFi Password",
-            "value": "\"a753285768\""
+            "value": "\"tsot9879\""
     }
     },
     "target_overrides": {
